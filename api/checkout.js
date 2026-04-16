@@ -32,7 +32,7 @@ export default async function handler(req, res) {
       }
     };
 
-    const response = await fetch('https://connect.squareup.com/v2/payment-links', {
+    const response = await fetch('https://connect.squareup.com/v2/online-checkout/payment-links', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
