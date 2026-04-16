@@ -6,25 +6,64 @@ export default async function handler(req, res) {
       return res.status(400).send('Missing products param');
     }
 
-    const line_items = products
-      .split(',')
-      .map((entry) => {
-        const [productId, qtyStr] = entry.split(':');
-        const quantity = parseInt(qtyStr, 10);
+    const headers = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
+      'Square-Version': '2025-01-23',
+    };
 
-        if (!productId || !quantity) return null;
+    async function resolveToVariationId(inputId) {
+      const lookupResp = await fetch(
+        `https://connect.squareup.com/v2/catalog/object/${inputId}`,
+        { headers }
+      );
 
-        return {
-          name: productId,
-          quantity: quantity.toString(),
-          item_type: 'ITEM',
-          catalog_object_id: productId,
-        };
-      })
-      .filter(Boolean);
+      const lookupData = await lookupResp.json();
 
-    if (!line_items.length) {
+      if (!lookupResp.ok) {
+        throw new Error(`Catalog lookup failed for ${inputId}: ${JSON.stringify(lookupData)}`);
+      }
+
+      const obj = lookupData.object;
+
+      if (!obj) {
+        throw new Error(`No catalog object returned for ${inputId}`);
+      }
+
+      if (obj.type === 'ITEM_VARIATION') {
+        return obj.id;
+      }
+
+      if (obj.type === 'ITEM') {
+        const variations = obj.item_data?.variations || [];
+        if (!variations.length) {
+          throw new Error(`Item ${inputId} has no variations`);
+        }
+        return variations[0].id;
+      }
+
+      throw new Error(`Unsupported catalog object type for ${inputId}: ${obj.type}`);
+    }
+
+    const rawProducts = products.split(',').map((entry) => {
+      const [productId, qtyStr] = entry.split(':');
+      const quantity = parseInt(qtyStr, 10);
+      if (!productId || !quantity) return null;
+      return { productId, quantity };
+    }).filter(Boolean);
+
+    if (!rawProducts.length) {
       return res.status(400).send('No valid line items');
+    }
+
+    const line_items = [];
+    for (const item of rawProducts) {
+      const variationId = await resolveToVariationId(item.productId);
+
+      line_items.push({
+        catalog_object_id: variationId,
+        quantity: item.quantity.toString(),
+      });
     }
 
     const payload = {
@@ -39,11 +78,7 @@ export default async function handler(req, res) {
       'https://connect.squareup.com/v2/online-checkout/payment-links',
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
-          'Square-Version': '2025-01-23',
-        },
+        headers,
         body: JSON.stringify(payload),
       }
     );
